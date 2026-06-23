@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "abl-deploy"
+version = "0.1.0"
+description = "Pipeline de deploy para Progress OpenEdge ABL: compila, move o .r e envia via SFTP"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Gabriel" }]
+keywords = ["progress", "openedge", "abl", "deploy", "cli", "sftp"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "paramiko>=3.4",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+
+[project.scripts]
+abl-deploy = "abl_deploy.cli:app"
+
+[project.urls]
+Repository = "https://github.com/GabrielVRV/Compilador-Progress"
+
+[tool.hatch.build.targets.wheel]
+packages = ["abl_deploy"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"abl_deploy/templates" = "abl_deploy/templates"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

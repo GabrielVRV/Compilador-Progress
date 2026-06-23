@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Testes / cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Progress OpenEdge
+*.r
+*.pl
+compile.log
+*.lst
+
+# Config local (NUNCA versionar credenciais)
+abl-deploy.toml
+.abl-deploy.toml
+
+# Segredos
+.env
+*.pem
+id_rsa
+id_rsa.*
+
+# IDE / SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
