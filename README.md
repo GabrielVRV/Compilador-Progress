@@ -55,54 +55,93 @@ pip install -e .
 
 ## Uso
 
-### 1. Criar a configuração
+### Menu interativo (mais fácil)
+
+Rode sem argumentos e siga as setas:
 
 ```bash
-abl-deploy init
+abl-deploy
 ```
 
-Isso gera um `abl-deploy.toml`. Edite os ambientes (host, usuário, diretório
-remoto, autenticação). Exemplo completo em
-[`abl-deploy.example.toml`](abl-deploy.example.toml).
+Ele pergunta: **projeto → ambiente → ação → fonte** (listando os `.p` das suas
+pastas) → confirma → compila e envia.
 
-### 2. Ver os ambientes
-
-```bash
-abl-deploy envs
-```
-
-### 3. Compilar e enviar
+### Por comando
 
 ```bash
+abl-deploy init               # cria abl-deploy.toml (projeto único)
+abl-deploy init --global      # cria ~/.abl-deploy.toml (vários projetos)
+abl-deploy projects           # lista os projetos
+abl-deploy envs               # lista os ambientes
 abl-deploy deploy escq9986rp.p --env prod
+abl-deploy deploy escq9986rp.p --env prod --project financeiro
 ```
 
-Opções úteis:
+Opções do `deploy`:
 
 | Flag               | Efeito                                            |
 |--------------------|---------------------------------------------------|
 | `--env / -e`       | ambiente alvo (obrigatório)                       |
+| `--project / -p`   | projeto (se houver mais de um na config)          |
 | `--compile-only`   | só compila, não envia                             |
 | `--skip-compile`   | envia um `.r` já existente em `build_dir`         |
 | `--version`        | mostra a versão                                   |
 
 ## Configuração
 
-O `abl-deploy.toml` tem uma seção `[default]` (vale para todos os ambientes) e
-um bloco `[env.<nome>]` por ambiente, que sobrescreve os defaults.
+### Um projeto
+
+`abl-deploy.toml` na pasta do projeto, com `[default]` (vale para todos os
+ambientes) e um bloco `[env.<nome>]` por ambiente.
+
+### Vários projetos
+
+Um config global em `~/.abl-deploy.toml` com um bloco `[project.<nome>]` por
+projeto, cada um com seus ambientes. A CLI procura, nesta ordem: a variável
+`ABL_DEPLOY_CONFIG`, um `abl-deploy.toml` local, e por fim `~/.abl-deploy.toml`.
 
 ```toml
-[default]
-dlc = "C:/Progress/OpenEdge"   # $DLC
-source_dir = "src"
-build_dir = "build"
-propath = ["src", "src/lib"]
+[project.financeiro]
+source_dir = "C:/projetos/financeiro/src"
+build_dir  = "C:/projetos/financeiro/build"
 
-[env.prod]
+[project.financeiro.env.prod]
 host = "prod.suaempresa.com"
 username = "deploy"
 key_file = "~/.ssh/id_rsa"
 remote_dir = "/u/app/prod/rcode"
+```
+
+### Buscar o fonte em várias pastas
+
+Se a tela e o `rp` ficam em pastas diferentes, liste todas em `source_dirs` —
+a CLI acha o fonte pelo nome em qualquer uma delas:
+
+```toml
+source_dir  = "src"
+source_dirs = ["src/telas", "src/rp"]
+```
+
+### Roteamento por nome do arquivo
+
+Para mandar `escq9986.r` (tela) e `escq9986rp.r` (programa) para pastas
+diferentes no servidor, use `routes` — a primeira regra cujo `match` casa vence;
+se nenhuma casar, usa o `remote_dir` do ambiente:
+
+```toml
+[env.prod]
+host = "prod.suaempresa.com"
+username = "deploy"
+key_file = "~/.ssh/id_rsa"
+remote_dir = "/u/app/prod/rcode"   # fallback
+
+[[env.prod.routes]]
+match = "*rp.p"
+remote_dir = "/u/app/prod/rp"
+
+[[env.prod.routes]]
+match = "*.p"
+remote_dir = "/u/app/prod/telas"
 ```
 
 ### Credenciais com segurança
@@ -124,6 +163,9 @@ pytest
 
 ## Roadmap
 
+- [x] Menu interativo
+- [x] Vários projetos em um config global
+- [x] Roteamento do `.r` por nome do arquivo
 - [ ] Deploy de múltiplos fontes (glob / lista)
 - [ ] Rollback do `.r` anterior
 - [ ] Hook de backup remoto antes de sobrescrever

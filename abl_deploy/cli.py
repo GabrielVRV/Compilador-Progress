@@ -1,9 +1,11 @@
 """Interface de linha de comando da ABL Deploy CLI.
 
 Comandos:
-    abl-deploy deploy <fonte.p> --env prod   compila + envia via SFTP
-    abl-deploy init                          cria um abl-deploy.toml de exemplo
-    abl-deploy envs                          lista os ambientes da config
+    abl-deploy                                menu interativo
+    abl-deploy deploy <fonte.p> -e prod       compila + envia via SFTP
+    abl-deploy init [--global]                cria um arquivo de config de exemplo
+    abl-deploy envs [-p projeto]              lista os ambientes
+    abl-deploy projects                       lista os projetos
 """
 
 from __future__ import annotations
@@ -14,63 +16,93 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 from rich.table import Table
 
 from . import __version__
-from .compiler import CompileError, compile_source
 from .config import (
     DEFAULT_CONFIG_NAMES,
+    GLOBAL_CONFIG_NAME,
     ConfigError,
     list_environments,
     load_config,
+    load_projects,
 )
-from .deployer import DeployError, deploy_file
+from .menu import run_menu
+from .pipeline import PipelineError, run_pipeline
 
 app = typer.Typer(
     add_completion=False,
     help="Pipeline de deploy para Progress OpenEdge ABL.",
-    no_args_is_help=True,
+    invoke_without_command=True,
 )
 console = Console()
 
 
-EXAMPLE_TOML = """\
-# Configuração da ABL Deploy CLI
-# Valores em [default] valem para todos os ambientes e podem ser
-# sobrescritos em cada [env.<nome>].
+EXAMPLE_SINGLE = """\
+# Config da ABL Deploy CLI (projeto unico).
+# [default] vale para todos os ambientes; cada [env.X] sobrescreve.
 
 [default]
-# dlc = "C:/Progress/OpenEdge"   # diretório do OpenEdge ($DLC)
-progres = "_progres"             # executável de batch (ou "prowin")
-source_dir = "src"               # raiz dos seus fontes .p/.w/.cls
-build_dir = "build"              # onde os .r serão gerados localmente
-propath = ["src", "src/lib"]     # diretórios adicionados ao PROPATH
+# dlc = "C:/Progress/OpenEdge"
+progres = "_progres"
+source_dir = "src"
+source_dirs = ["src/telas", "src/rp"]
+build_dir = "build"
+propath = ["src", "src/lib"]
 
 [env.dev]
 host = "dev.suaempresa.com"
-port = 22
 username = "deploy"
-password = "env:ABL_DEV_PASS"    # lê a senha da variável de ambiente
+password = "env:ABL_DEV_PASS"
 remote_dir = "/u/app/dev/rcode"
 
-[env.staging]
-host = "staging.suaempresa.com"
-username = "deploy"
-key_file = "~/.ssh/id_rsa"       # autenticação por chave SSH
-remote_dir = "/u/app/staging/rcode"
+[[env.dev.routes]]
+match = "*rp.p"
+remote_dir = "/u/app/dev/rp"
+
+[[env.dev.routes]]
+match = "*.p"
+remote_dir = "/u/app/dev/telas"
 
 [env.prod]
 host = "prod.suaempresa.com"
 username = "deploy"
 key_file = "~/.ssh/id_rsa"
 remote_dir = "/u/app/prod/rcode"
+"""
+
+EXAMPLE_GLOBAL = """\
+# Config GLOBAL da ABL Deploy CLI (~/.abl-deploy.toml) - multi-projeto.
+
+[project.financeiro]
+source_dir = "C:/projetos/financeiro/src"
+source_dirs = ["C:/projetos/financeiro/src/telas", "C:/projetos/financeiro/src/rp"]
+build_dir  = "C:/projetos/financeiro/build"
+propath = ["C:/projetos/financeiro/src"]
+
+[project.financeiro.env.prod]
+host = "prod.suaempresa.com"
+username = "deploy"
+key_file = "~/.ssh/id_rsa"
+remote_dir = "/u/app/prod/rcode"
+
+[[project.financeiro.env.prod.routes]]
+match = "*rp.p"
+remote_dir = "/u/app/prod/rp"
+
+[[project.financeiro.env.prod.routes]]
+match = "*.p"
+remote_dir = "/u/app/prod/telas"
+
+[project.estoque]
+source_dir = "C:/projetos/estoque/src"
+build_dir  = "C:/projetos/estoque/build"
+
+[project.estoque.env.prod]
+host = "prod.suaempresa.com"
+username = "deploy"
+key_file = "~/.ssh/id_rsa"
+remote_dir = "/u/app/estoque/rcode"
 """
 
 
@@ -82,30 +114,41 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     _version: Optional[bool] = typer.Option(
         None, "--version", "-V", callback=_version_callback, is_eager=True,
-        help="Mostra a versão e sai.",
+        help="Mostra a versao e sai.",
     ),
 ) -> None:
-    """Pipeline de deploy para Progress OpenEdge ABL."""
+    """Sem subcomando: abre o menu interativo."""
+    if ctx.invoked_subcommand is None:
+        raise typer.Exit(code=run_menu())
 
 
 @app.command()
 def init(
-    force: bool = typer.Option(False, "--force", "-f", help="Sobrescreve se já existir."),
+    global_: bool = typer.Option(
+        False, "--global", "-g", help="Cria o config global (~/.abl-deploy.toml)."
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Sobrescreve se ja existir."),
 ) -> None:
-    """Cria um arquivo de configuração de exemplo no diretório atual."""
-    target = Path(DEFAULT_CONFIG_NAMES[0])
+    """Cria um arquivo de configuracao de exemplo."""
+    if global_:
+        target = Path.home() / GLOBAL_CONFIG_NAME
+        content = EXAMPLE_GLOBAL
+    else:
+        target = Path(DEFAULT_CONFIG_NAMES[0])
+        content = EXAMPLE_SINGLE
+
     if target.exists() and not force:
-        console.print(
-            f"[yellow]{target} já existe.[/] Use --force para sobrescrever."
-        )
+        console.print(f"[yellow]{target} ja existe.[/] Use --force para sobrescrever.")
         raise typer.Exit(code=1)
-    target.write_text(EXAMPLE_TOML, encoding="utf-8")
+
+    target.write_text(content, encoding="utf-8")
     console.print(
         Panel.fit(
             f"Config criada em [bold]{target}[/].\n"
-            "Edite os ambientes e rode: [bold]abl-deploy deploy <fonte.p> --env dev[/]",
+            "Edite e rode [bold]abl-deploy[/] para abrir o menu.",
             title="abl-deploy init",
             border_style="green",
         )
@@ -113,14 +156,31 @@ def init(
 
 
 @app.command()
-def envs() -> None:
-    """Lista os ambientes definidos na configuração."""
+def projects() -> None:
+    """Lista os projetos definidos na configuracao."""
     try:
-        environments = list_environments()
+        projs = load_projects()
     except ConfigError as exc:
         console.print(f"[red]Erro:[/] {exc}")
         raise typer.Exit(code=1)
+    table = Table(title="Projetos", show_header=True, header_style="bold magenta")
+    table.add_column("Projeto")
+    table.add_column("Ambientes")
+    for name, proj in sorted(projs.items()):
+        table.add_row(name, ", ".join(proj.env_names()) or "[dim](nenhum)[/]")
+    console.print(table)
 
+
+@app.command()
+def envs(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Projeto."),
+) -> None:
+    """Lista os ambientes definidos na configuracao."""
+    try:
+        environments = list_environments(project)
+    except ConfigError as exc:
+        console.print(f"[red]Erro:[/] {exc}")
+        raise typer.Exit(code=1)
     table = Table(title="Ambientes", show_header=True, header_style="bold cyan")
     table.add_column("Ambiente")
     for name in environments:
@@ -132,99 +192,34 @@ def envs() -> None:
 def deploy(
     source: str = typer.Argument(..., help="Fonte ABL a compilar (ex.: escq9986rp.p)."),
     env: str = typer.Option(..., "--env", "-e", help="Ambiente (dev/staging/prod)."),
+    project: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Projeto (se houver mais de um na config)."
+    ),
     compile_only: bool = typer.Option(
         False, "--compile-only", "-c", help="Apenas compila, sem enviar."
     ),
     skip_compile: bool = typer.Option(
-        False, "--skip-compile", help="Envia um .r já existente em build_dir."
+        False, "--skip-compile", help="Envia um .r ja existente em build_dir."
     ),
 ) -> None:
     """Compila o fonte e envia o .r para o ambiente via SFTP."""
     try:
-        cfg = load_config(env)
+        cfg = load_config(env, project)
     except ConfigError as exc:
         console.print(f"[red]Erro de config:[/] {exc}")
         raise typer.Exit(code=1)
 
-    console.print(
-        Panel.fit(
-            f"[bold]{source}[/]  →  ambiente [bold cyan]{env}[/]",
-            title="ABL Deploy",
-            border_style="cyan",
-        )
-    )
-
-    r_code: Path
-
-    # --- Passo 1: compilar ---
-    if skip_compile:
-        from .compiler import _r_code_path  # reuso interno
-
-        src = Path(source)
-        r_code = _r_code_path(src, Path(cfg.build_dir).resolve())
-        if not r_code.is_file():
-            console.print(f"[red]Erro:[/] .r não encontrado em {r_code}")
-            raise typer.Exit(code=1)
-        console.print(f"[dim]Usando .r existente:[/] {r_code}")
-    else:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TimeElapsedColumn(),
-            console=console,
-            transient=True,
-        ) as progress:
-            progress.add_task("Compilando ABL...", total=None)
-            try:
-                result = compile_source(cfg, source)
-            except CompileError as exc:
-                console.print("[red]✗ Falha na compilação:[/]")
-                console.print(Panel(str(exc), border_style="red"))
-                raise typer.Exit(code=1)
-        r_code = result.r_code
-        console.print(f"[green]✓[/] Compilado: [bold]{r_code.name}[/]")
-
-    if compile_only:
-        console.print("[dim]--compile-only: deploy ignorado.[/]")
-        raise typer.Exit()
-
-    # --- Passo 2: enviar via SFTP ---
     try:
-        cfg.require_deploy()
-    except ConfigError as exc:
-        console.print(f"[red]Erro de config:[/] {exc}")
+        run_pipeline(
+            cfg,
+            source,
+            console=console,
+            compile_only=compile_only,
+            skip_compile=skip_compile,
+        )
+    except PipelineError as exc:
+        console.print(f"[red]X {exc}[/]")
         raise typer.Exit(code=1)
-
-    size = r_code.stat().st_size
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total} bytes"),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task(
-            f"Enviando para {cfg.host}", total=size
-        )
-
-        def _cb(done: int, total: int) -> None:
-            progress.update(task, completed=done, total=total)
-
-        try:
-            res = deploy_file(cfg, r_code, progress=_cb)
-        except DeployError as exc:
-            console.print(f"[red]✗ Falha no deploy:[/] {exc}")
-            raise typer.Exit(code=1)
-
-    console.print(
-        Panel.fit(
-            f"[green]✓ Deploy concluído[/]\n"
-            f"local:  {res.local}\n"
-            f"remoto: {cfg.username}@{cfg.host}:{res.remote}\n"
-            f"tamanho: {res.size} bytes",
-            border_style="green",
-        )
-    )
 
 
 if __name__ == "__main__":  # pragma: no cover

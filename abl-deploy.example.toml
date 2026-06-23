@@ -1,11 +1,15 @@
-# Exemplo de configuração da ABL Deploy CLI.
-# Copie para "abl-deploy.toml" e ajuste. NUNCA versione o arquivo real
-# com credenciais — ele já está no .gitignore.
+# Exemplo de configuração da ABL Deploy CLI (projeto único).
+# Copie para "abl-deploy.toml" e ajuste. NUNCA versione o arquivo real com
+# credenciais — ele já está no .gitignore.
+#
+# Para vários projetos, use o config GLOBAL (~/.abl-deploy.toml) com blocos
+# [project.NOME] — gere um exemplo com:  abl-deploy init --global
 
 [default]
 # dlc = "C:/Progress/OpenEdge"   # diretório do OpenEdge ($DLC)
 progres = "_progres"             # executável de batch (ou "prowin")
-source_dir = "src"               # raiz dos seus fontes .p/.w/.cls
+source_dir = "src"               # pasta principal dos fontes
+source_dirs = ["src/telas", "src/rp"]   # pastas extras onde buscar o fonte pelo nome
 build_dir = "build"              # onde os .r serão gerados localmente
 propath = ["src", "src/lib"]     # diretórios adicionados ao PROPATH
 # pf_file = "conn.pf"            # parameter file opcional (-pf)
@@ -16,7 +20,17 @@ host = "dev.suaempresa.com"
 port = 22
 username = "deploy"
 password = "env:ABL_DEV_PASS"    # lê a senha da variável de ambiente ABL_DEV_PASS
-remote_dir = "/u/app/dev/rcode"
+remote_dir = "/u/app/dev/rcode"  # destino padrão
+
+# Roteamento por nome do arquivo: o .r da tela vai para uma pasta e o do
+# programa "rp" para outra. A primeira regra cujo 'match' casa vence.
+[[env.dev.routes]]
+match = "*rp.p"
+remote_dir = "/u/app/dev/rp"
+
+[[env.dev.routes]]
+match = "*.p"
+remote_dir = "/u/app/dev/telas"
 
 [env.staging]
 host = "staging.suaempresa.com"

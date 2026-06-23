@@ -33,8 +33,7 @@ def _executable(cfg: EnvConfig) -> str:
     progres = cfg.progres
     if cfg.dlc:
         candidate = Path(cfg.dlc) / "bin" / progres
-        # No Windows o binário tem extensão .exe
-        if candidate.exists() or (sys.platform.startswith("win")):
+        if candidate.exists() or sys.platform.startswith("win"):
             return str(candidate)
     return progres
 
@@ -44,17 +43,37 @@ def _r_code_path(source: Path, build_dir: Path) -> Path:
     return build_dir / (source.stem + ".r")
 
 
+def find_source(cfg: EnvConfig, source: str) -> Path:
+    """Localiza o fonte procurando em todas as pastas configuradas.
+
+    Aceita caminho absoluto, ou nome relativo buscado em source_dir e
+    em cada uma das source_dirs. Levanta ``CompileError`` se não achar.
+    """
+    if Path(source).is_absolute():
+        p = Path(source).resolve()
+        if p.is_file():
+            return p
+        raise CompileError(f"Fonte não encontrado: {p}")
+
+    tried: list[str] = []
+    for d in cfg.search_dirs():
+        candidate = (Path(d) / source).resolve()
+        tried.append(str(candidate))
+        if candidate.is_file():
+            return candidate
+    raise CompileError(
+        "Fonte não encontrado. Procurei em:\n  " + "\n  ".join(tried)
+    )
+
+
 def compile_source(cfg: EnvConfig, source: str) -> CompileResult:
     """Compila um fonte e devolve o caminho do .r gerado.
 
     Levanta ``CompileError`` se o compilador reportar erro ou se o .r
     não for produzido.
     """
-    source_root = Path(cfg.source_dir).resolve()
-    src_path = (source_root / source) if not Path(source).is_absolute() else Path(source)
-    src_path = src_path.resolve()
-    if not src_path.is_file():
-        raise CompileError(f"Fonte não encontrado: {src_path}")
+    src_path = find_source(cfg, source)
+    source_root = src_path.parent
 
     build_dir = Path(cfg.build_dir).resolve()
     build_dir.mkdir(parents=True, exist_ok=True)
