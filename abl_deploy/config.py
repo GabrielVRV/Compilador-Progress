@@ -69,6 +69,10 @@ class EnvConfig:
     # --- Roteamento por nome do arquivo ---
     routes: list[dict] = field(default_factory=list)
 
+    # --- Frontend (arquivos estáticos enviados sem compilar) ---
+    # { local_dir = "web", remote_dir = "/u/app/dev/web", include = ["*.html","*.js"] }
+    frontend: dict | None = None
+
     def require_deploy(self) -> None:
         """Valida campos obrigatórios para o passo de deploy."""
         missing = [k for k in ("host", "username") if not getattr(self, k)]
@@ -117,6 +121,17 @@ class EnvConfig:
             if pattern and fnmatch(filename, pattern):
                 return rule.get("remote_dir", self.remote_dir)
         return self.remote_dir
+
+    def frontend_target(self) -> tuple[str, str, list[str]] | None:
+        """Devolve (local_dir, remote_dir, include) do frontend, se houver."""
+        if not self.frontend:
+            return None
+        fe = self.frontend
+        local = fe.get("local_dir")
+        remote = fe.get("remote_dir")
+        if not local or not remote:
+            return None
+        return local, remote, list(fe.get("include", []))
 
 
 @dataclass

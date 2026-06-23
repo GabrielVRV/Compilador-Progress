@@ -32,6 +32,14 @@ remote_dir = "/u/app/dev/rp"
 match = "*.p"
 remote_dir = "/u/app/dev/telas"
 
+
+# Frontend: arquivos estaticos enviados SEM compilar (telas web, js, css).
+# Use o modo watch (abl-deploy watch -e dev) para enviar automaticamente ao salvar.
+[env.dev.frontend]
+local_dir = "web"
+remote_dir = "/u/app/dev/web"
+include = ["*.html", "*.js", "*.css", "*.png"]   # vazio = envia tudo
+
 [env.staging]
 host = "staging.suaempresa.com"
 username = "deploy"

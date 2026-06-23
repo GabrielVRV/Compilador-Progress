@@ -27,8 +27,10 @@ from .config import (
     load_config,
     load_projects,
 )
+from .frontend import FrontendError, send_frontend, watch_frontend
 from .menu import run_menu
 from .pipeline import PipelineError, run_pipeline
+from .wizard import run_wizard
 
 app = typer.Typer(
     add_completion=False,
@@ -63,6 +65,11 @@ remote_dir = "/u/app/dev/rp"
 [[env.dev.routes]]
 match = "*.p"
 remote_dir = "/u/app/dev/telas"
+
+[env.dev.frontend]
+local_dir = "web"
+remote_dir = "/u/app/dev/web"
+include = ["*.html", "*.js", "*.css", "*.png"]
 
 [env.prod]
 host = "prod.suaempresa.com"
@@ -220,6 +227,49 @@ def deploy(
     except PipelineError as exc:
         console.print(f"[red]X {exc}[/]")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def config() -> None:
+    """Abre o assistente de configuracao (cria/edita o .toml)."""
+    raise typer.Exit(code=run_wizard())
+
+
+@app.command()
+def frontend(
+    env: str = typer.Option(..., "--env", "-e", help="Ambiente (dev/staging/prod)."),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Projeto."),
+) -> None:
+    """Envia todos os arquivos de frontend (sem compilar)."""
+    try:
+        cfg = load_config(env, project)
+    except ConfigError as exc:
+        console.print(f"[red]Erro de config:[/] {exc}")
+        raise typer.Exit(code=1)
+    try:
+        send_frontend(cfg, console=console)
+    except FrontendError as exc:
+        console.print(f"[red]X {exc}[/]")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def watch(
+    env: str = typer.Option(..., "--env", "-e", help="Ambiente (dev/staging/prod)."),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Projeto."),
+) -> None:
+    """Observa a pasta do frontend e envia cada arquivo ao salvar (Ctrl+C para parar)."""
+    try:
+        cfg = load_config(env, project)
+    except ConfigError as exc:
+        console.print(f"[red]Erro de config:[/] {exc}")
+        raise typer.Exit(code=1)
+    try:
+        watch_frontend(cfg, console=console)
+    except FrontendError as exc:
+        console.print(f"[red]X {exc}[/]")
+        raise typer.Exit(code=1)
+
 
 
 if __name__ == "__main__":  # pragma: no cover

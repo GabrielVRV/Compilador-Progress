@@ -1,51 +1,42 @@
 # 🚀 ABL Deploy CLI
 
-Pipeline de deploy para **Progress OpenEdge (ABL)** em um único comando.
+Deploy para **Progress OpenEdge (ABL)** — e para o **frontend** — sem sair de um menu.
+
+Configura uma vez e depois é só abrir o menu e escolher o que fazer:
 
 ```bash
-abl-deploy deploy escq9986rp.p --env prod
+abl-deploy
 ```
 
-A CLI faz todo o fluxo que hoje é manual no App Builder + WinSCP: **compila** o
-fonte, gera o `.r`, e **envia via SFTP** para o servidor do ambiente escolhido.
+```
+? O que você quer fazer?
+  ❯ Compilar e enviar ABL
+    Enviar frontend (uma vez)
+    Observar frontend (watch, auto-envio)
+    Configurar (assistente)
+    Sair
+```
 
----
+Acaba com o ritual manual de abrir o App Builder pra compilar e o WinSCP pra
+arrastar arquivo — tanto o `.r` do ABL quanto os arquivos de tela do frontend.
 
-## Por que existe
+## O que ela faz
 
-No dia a dia com OpenEdge, publicar uma alteração costuma ser: abrir o editor,
-compilar pelo App Builder, achar o `.r`, abrir o WinSCP, arrastar pro servidor
-certo. É manual, repetitivo e fácil de errar de ambiente. A `abl-deploy`
-transforma isso em um comando versionável e reproduzível.
+- **ABL**: compila o fonte (`_progres` em batch) e envia o `.r` via SFTP.
+- **Frontend**: envia os arquivos estáticos (html/js/css/…) via SFTP, sem compilar.
+- **Watch**: observa a pasta do frontend e **envia sozinho a cada vez que você salva**.
+- **Assistente**: configura tudo respondendo perguntas — sem editar arquivo na mão.
+- **Vários projetos** e **vários ambientes** (dev/staging/prod) num só lugar.
+- **Roteamento por nome**: `*rp.p` vai pra uma pasta, `*.p` pra outra.
 
 ## Stack
 
-| Camada        | Ferramenta                          |
-|---------------|-------------------------------------|
-| CLI           | [`typer`](https://typer.tiangolo.com) |
-| Output        | [`rich`](https://rich.readthedocs.io) (spinner, barra de progresso, cores) |
-| Compilação    | `subprocess` chamando `_progres -b` com um `compile.p` |
-| Deploy        | [`paramiko`](https://www.paramiko.org) (SFTP, substitui o WinSCP) |
-| Config        | arquivo `.toml` com ambientes `dev` / `staging` / `prod` |
-
-## Como funciona
-
-```
-abl-deploy deploy fonte.p --env prod
-        │
-        ├─ 1. carrega o ambiente do abl-deploy.toml
-        ├─ 2. _progres -b -p compile.p  →  gera build/fonte.r
-        └─ 3. paramiko SFTP  →  envia o .r para o remote_dir do ambiente
-```
-
-A compilação roda o template [`compile.p`](abl_deploy/templates/compile.p), que
-faz `COMPILE ... SAVE INTO` e devolve `COMPILE-OK` ou as mensagens de erro do
-compilador ABL, capturadas e exibidas pela CLI.
+`typer` (CLI) · `rich` (output) · `questionary` (menu) · `paramiko` (SFTP, no lugar do
+WinSCP) · `watchdog` (watch) · config em `.toml`.
 
 ## Instalação
 
-Requer Python 3.9+ e um ambiente com o OpenEdge instalado (para o passo de
-compilação).
+Requer Python 3.9+ e, para compilar ABL, o OpenEdge instalado.
 
 ```bash
 git clone https://github.com/GabrielVRV/Compilador-Progress.git
@@ -55,104 +46,75 @@ pip install -e .
 
 ## Uso
 
-### Menu interativo (mais fácil)
-
-Rode sem argumentos e siga as setas:
+Na prática, só isto:
 
 ```bash
 abl-deploy
 ```
 
-Ele pergunta: **projeto → ambiente → ação → fonte** (listando os `.p` das suas
-pastas) → confirma → compila e envia.
+Na primeira vez ele abre o assistente, você responde host, pastas, etc., e pronto.
+Depois é só rodar `abl-deploy` e escolher a ação no menu.
 
-### Por comando
+### Watch do frontend (a parte que mais economiza tempo)
 
-```bash
-abl-deploy init               # cria abl-deploy.toml (projeto único)
-abl-deploy init --global      # cria ~/.abl-deploy.toml (vários projetos)
-abl-deploy projects           # lista os projetos
-abl-deploy envs               # lista os ambientes
-abl-deploy deploy escq9986rp.p --env prod
-abl-deploy deploy escq9986rp.p --env prod --project financeiro
-```
+Escolha "Observar frontend" (ou `abl-deploy watch -e dev`). Ele faz um envio
+inicial e fica observando a pasta: salvou um arquivo no editor, ele sobe na hora,
+mantendo a conexão SFTP aberta. `Ctrl+C` para parar.
 
-Opções do `deploy`:
+### Comandos (para quem prefere linha de comando)
 
-| Flag               | Efeito                                            |
-|--------------------|---------------------------------------------------|
-| `--env / -e`       | ambiente alvo (obrigatório)                       |
-| `--project / -p`   | projeto (se houver mais de um na config)          |
-| `--compile-only`   | só compila, não envia                             |
-| `--skip-compile`   | envia um `.r` já existente em `build_dir`         |
-| `--version`        | mostra a versão                                   |
+| Comando | Faz |
+|---|---|
+| `abl-deploy` | abre o menu (recomendado) |
+| `abl-deploy config` | assistente de configuração |
+| `abl-deploy deploy escq9986rp.p -e prod` | compila e envia um fonte ABL |
+| `abl-deploy frontend -e dev` | envia o frontend uma vez |
+| `abl-deploy watch -e dev` | observa o frontend e auto-envia ao salvar |
+| `abl-deploy projects` / `envs` | lista projetos / ambientes |
+
+Opções comuns: `--env/-e` (ambiente), `--project/-p` (projeto), e no `deploy`
+ainda `--compile-only` e `--skip-compile`.
 
 ## Configuração
 
-### Um projeto
-
-`abl-deploy.toml` na pasta do projeto, com `[default]` (vale para todos os
-ambientes) e um bloco `[env.<nome>]` por ambiente.
-
-### Vários projetos
-
-Um config global em `~/.abl-deploy.toml` com um bloco `[project.<nome>]` por
-projeto, cada um com seus ambientes. A CLI procura, nesta ordem: a variável
-`ABL_DEPLOY_CONFIG`, um `abl-deploy.toml` local, e por fim `~/.abl-deploy.toml`.
+O assistente grava o `.toml` pra você, mas o formato é simples e dá pra editar à mão.
+A CLI procura, nesta ordem: a variável `ABL_DEPLOY_CONFIG`, um `abl-deploy.toml`
+local, e por fim `~/.abl-deploy.toml` (global, para vários projetos).
 
 ```toml
 [project.financeiro]
-source_dir = "C:/projetos/financeiro/src"
-build_dir  = "C:/projetos/financeiro/build"
+source_dir  = "C:/projetos/financeiro/src"
+source_dirs = ["C:/projetos/financeiro/src/telas", "C:/projetos/financeiro/src/rp"]
+build_dir   = "C:/projetos/financeiro/build"
 
-[project.financeiro.env.prod]
-host = "prod.suaempresa.com"
+[project.financeiro.env.dev]
+host = "dev.suaempresa.com"
 username = "deploy"
 key_file = "~/.ssh/id_rsa"
-remote_dir = "/u/app/prod/rcode"
-```
+remote_dir = "/u/app/dev/rcode"
 
-### Buscar o fonte em várias pastas
-
-Se a tela e o `rp` ficam em pastas diferentes, liste todas em `source_dirs` —
-a CLI acha o fonte pelo nome em qualquer uma delas:
-
-```toml
-source_dir  = "src"
-source_dirs = ["src/telas", "src/rp"]
-```
-
-### Roteamento por nome do arquivo
-
-Para mandar `escq9986.r` (tela) e `escq9986rp.r` (programa) para pastas
-diferentes no servidor, use `routes` — a primeira regra cujo `match` casa vence;
-se nenhuma casar, usa o `remote_dir` do ambiente:
-
-```toml
-[env.prod]
-host = "prod.suaempresa.com"
-username = "deploy"
-key_file = "~/.ssh/id_rsa"
-remote_dir = "/u/app/prod/rcode"   # fallback
-
-[[env.prod.routes]]
+# .r da tela e do "rp" vão para pastas diferentes:
+[[project.financeiro.env.dev.routes]]
 match = "*rp.p"
-remote_dir = "/u/app/prod/rp"
+remote_dir = "/u/app/dev/rp"
 
-[[env.prod.routes]]
+[[project.financeiro.env.dev.routes]]
 match = "*.p"
-remote_dir = "/u/app/prod/telas"
+remote_dir = "/u/app/dev/telas"
+
+# Frontend (enviado sem compilar; use o watch):
+[project.financeiro.env.dev.frontend]
+local_dir = "C:/projetos/financeiro/web"
+remote_dir = "/u/app/dev/web"
+include = ["*.html", "*.js", "*.css", "*.png"]   # vazio = tudo
 ```
+
+Exemplo completo em [`abl-deploy.example.toml`](abl-deploy.example.toml).
 
 ### Credenciais com segurança
 
-Nunca coloque senhas no arquivo versionado. Use uma das opções:
-
-- **Chave SSH** (recomendado): `key_file = "~/.ssh/id_rsa"`
-- **Variável de ambiente**: `password = "env:ABL_PROD_PASS"` — a CLI lê de
-  `$ABL_PROD_PASS` na hora do deploy.
-
-O `abl-deploy.toml` real já está no `.gitignore`.
+Use **chave SSH** (`key_file = "~/.ssh/id_rsa"`) ou **variável de ambiente**
+(`password = "env:ABL_PROD_PASS"`). O `abl-deploy.toml` real está no `.gitignore`.
 
 ## Desenvolvimento
 
@@ -163,12 +125,13 @@ pytest
 
 ## Roadmap
 
-- [x] Menu interativo
-- [x] Vários projetos em um config global
+- [x] Menu interativo como hub central
+- [x] Assistente de configuração
+- [x] Vários projetos / ambientes
 - [x] Roteamento do `.r` por nome do arquivo
-- [ ] Deploy de múltiplos fontes (glob / lista)
-- [ ] Rollback do `.r` anterior
-- [ ] Hook de backup remoto antes de sobrescrever
+- [x] Envio de frontend + modo watch (auto-envio ao salvar)
+- [ ] Envio só de arquivos alterados (hash/manifest)
+- [ ] Deploy de múltiplos fontes ABL de uma vez
 - [ ] `--dry-run`
 
 ## Licença

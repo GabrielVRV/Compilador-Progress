@@ -1,15 +1,12 @@
-"""Deploy do .r para o servidor via SFTP (paramiko).
-
-Substitui o passo manual de WinSCP: conecta no host configurado,
-garante o diretório remoto e envia o arquivo.
-"""
+"""Deploy via SFTP (paramiko). Substitui o passo manual de WinSCP."""
 
 from __future__ import annotations
 
 import posixpath
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable, Iterator
 
 import paramiko
 
@@ -17,7 +14,7 @@ from .config import EnvConfig
 
 
 class DeployError(Exception):
-    """Falha durante a conexão ou o envio SFTP."""
+    """Falha durante a conexao ou o envio SFTP."""
 
 
 @dataclass
@@ -27,21 +24,69 @@ class DeployResult:
     size: int
 
 
-def _ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
-    """Cria o diretório remoto recursivamente, se não existir."""
+def _connect_kwargs(cfg: EnvConfig) -> dict:
+    kwargs: dict = {
+        "hostname": cfg.host,
+        "port": cfg.port,
+        "username": cfg.username,
+        "timeout": 30,
+    }
+    if cfg.key_file:
+        kwargs["key_filename"] = str(Path(cfg.key_file).expanduser())
+    else:
+        kwargs["password"] = cfg.resolve_password()
+        kwargs["look_for_keys"] = False
+        kwargs["allow_agent"] = False
+    return kwargs
+
+
+@contextmanager
+def sftp_session(cfg: EnvConfig) -> Iterator[paramiko.SFTPClient]:
+    """Abre uma conexao SSH/SFTP e garante o fechamento."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(**_connect_kwargs(cfg))
+    except paramiko.AuthenticationException as exc:
+        raise DeployError(
+            f"Falha de autenticacao em {cfg.username}@{cfg.host}."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise DeployError(f"Nao foi possivel conectar em {cfg.host}: {exc}") from exc
+
+    try:
+        sftp = client.open_sftp()
+        yield sftp
+        sftp.close()
+    finally:
+        client.close()
+
+
+def ensure_remote_dir(
+    sftp: paramiko.SFTPClient, remote_dir: str, _cache: set[str] | None = None
+) -> None:
+    """Cria o diretorio remoto recursivamente, se nao existir."""
+    if not remote_dir:
+        return
+    if _cache is not None and remote_dir in _cache:
+        return
     parts = remote_dir.strip("/").split("/")
     path = "/" if remote_dir.startswith("/") else ""
     for part in parts:
+        if not part:
+            continue
         path = posixpath.join(path, part) if path else part
         try:
             sftp.stat(path)
         except IOError:
             try:
                 sftp.mkdir(path)
-            except IOError as exc:  # corrida ou permissão
+            except IOError as exc:
                 raise DeployError(
-                    f"Não foi possível criar o diretório remoto '{path}': {exc}"
+                    f"Nao foi possivel criar o diretorio remoto '{path}': {exc}"
                 ) from exc
+    if _cache is not None:
+        _cache.add(remote_dir)
 
 
 def deploy_file(
@@ -50,51 +95,67 @@ def deploy_file(
     *,
     progress: Callable[[int, int], None] | None = None,
 ) -> DeployResult:
-    """Envia ``local_file`` para o ``remote_dir`` do ambiente via SFTP."""
+    """Envia um unico arquivo para o remote_dir do ambiente."""
     cfg.require_deploy()
     local_file = Path(local_file).resolve()
     if not local_file.is_file():
-        raise DeployError(f"Arquivo local não encontrado: {local_file}")
+        raise DeployError(f"Arquivo local nao encontrado: {local_file}")
+    assert cfg.remote_dir
 
-    assert cfg.host and cfg.username and cfg.remote_dir  # validado em require_deploy
-
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    connect_kwargs: dict = {
-        "hostname": cfg.host,
-        "port": cfg.port,
-        "username": cfg.username,
-        "timeout": 30,
-    }
-    if cfg.key_file:
-        connect_kwargs["key_filename"] = str(Path(cfg.key_file).expanduser())
-    else:
-        connect_kwargs["password"] = cfg.resolve_password()
-        connect_kwargs["look_for_keys"] = False
-        connect_kwargs["allow_agent"] = False
-
-    try:
-        client.connect(**connect_kwargs)
-    except paramiko.AuthenticationException as exc:
-        raise DeployError(
-            f"Falha de autenticação em {cfg.username}@{cfg.host}."
-        ) from exc
-    except Exception as exc:  # noqa: BLE001 - rede/host
-        raise DeployError(f"Não foi possível conectar em {cfg.host}: {exc}") from exc
-
-    try:
-        sftp = client.open_sftp()
-        _ensure_remote_dir(sftp, cfg.remote_dir)
+    with sftp_session(cfg) as sftp:
+        ensure_remote_dir(sftp, cfg.remote_dir)
         remote_path = posixpath.join(cfg.remote_dir, local_file.name)
-        sftp.put(str(local_file), remote_path, callback=progress)
-        size = sftp.stat(remote_path).st_size or local_file.stat().st_size
-        sftp.close()
-    except DeployError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise DeployError(f"Falha no envio SFTP: {exc}") from exc
-    finally:
-        client.close()
+        try:
+            sftp.put(str(local_file), remote_path, callback=progress)
+            size = sftp.stat(remote_path).st_size or local_file.stat().st_size
+        except DeployError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DeployError(f"Falha no envio SFTP: {exc}") from exc
 
     return DeployResult(local=local_file, remote=remote_path, size=int(size))
+
+
+def deploy_many(
+    cfg: EnvConfig,
+    base_local: Path,
+    base_remote: str,
+    rel_files: Iterable[str],
+    *,
+    on_file: Callable[[str], None] | None = None,
+    sftp: paramiko.SFTPClient | None = None,
+) -> list[DeployResult]:
+    """Envia varios arquivos preservando a estrutura de pastas.
+
+    ``rel_files`` sao caminhos relativos a ``base_local``; cada um vai para
+    ``base_remote/<rel>``. Se ``sftp`` for informado, reutiliza a conexao
+    (usado pelo modo watch para nao reconectar a cada arquivo).
+    """
+    base_local = Path(base_local)
+    results: list[DeployResult] = []
+    cache: set[str] = set()
+
+    def _send(s: paramiko.SFTPClient) -> None:
+        for rel in rel_files:
+            rel_posix = Path(rel).as_posix()
+            local = (base_local / rel).resolve()
+            if not local.is_file():
+                continue
+            remote_path = posixpath.join(base_remote, rel_posix)
+            ensure_remote_dir(s, posixpath.dirname(remote_path), cache)
+            try:
+                s.put(str(local), remote_path)
+            except Exception as exc:  # noqa: BLE001
+                raise DeployError(f"Falha ao enviar {rel_posix}: {exc}") from exc
+            if on_file:
+                on_file(rel_posix)
+            results.append(
+                DeployResult(local=local, remote=remote_path, size=local.stat().st_size)
+            )
+
+    if sftp is not None:
+        _send(sftp)
+    else:
+        with sftp_session(cfg) as s:
+            _send(s)
+    return results
