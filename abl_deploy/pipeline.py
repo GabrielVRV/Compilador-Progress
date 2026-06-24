@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +17,8 @@ from rich.progress import (
 
 from .compiler import CompileError, _r_code_path, compile_source, find_source
 from .config import ConfigError, EnvConfig
-from .deployer import DeployError, deploy_file
+from .history import backup_dir_for, last_restorable, recent, record_deploy
+from .deployer import DeployError, deploy_file, restore_file
 
 
 class PipelineError(Exception):
@@ -91,8 +91,7 @@ def run_pipeline(
             "Verifique remote_dir/routes."
         )
 
-    target = copy.copy(cfg)
-    target.remote_dir = remote_dir
+    bdir = backup_dir_for(cfg) if cfg.backup else None
 
     size = r_code.stat().st_size
     with Progress(
@@ -108,17 +107,59 @@ def run_pipeline(
             progress.update(task, completed=done, total=total)
 
         try:
-            res = deploy_file(target, r_code, progress=_cb)
+            res = deploy_file(
+                cfg, r_code, remote_dir=remote_dir, progress=_cb, backup_dir=bdir
+            )
         except DeployError as exc:
             raise PipelineError(str(exc)) from exc
 
+    record_deploy(
+        cfg,
+        source=Path(source).name,
+        r_name=r_code.name,
+        remote_path=res.remote,
+        backup=res.backup,
+    )
+
+    backup_line = (
+        f"\nbackup: {res.backup}" if res.backup else "\n[dim](sem versao anterior no servidor)[/]"
+    )
     console.print(
         Panel.fit(
             f"[green]OK Deploy concluido[/]\n"
             f"local:  {res.local}\n"
             f"remoto: {cfg.username}@{cfg.host}:{res.remote}\n"
-            f"tamanho: {res.size} bytes",
+            f"tamanho: {res.size} bytes" + backup_line,
             border_style="green",
         )
     )
     return PipelineResult(r_code=r_code, remote=res.remote)
+
+
+def run_rollback(cfg: EnvConfig, *, console: Console, r_name: str | None = None) -> int:
+    """Restaura a versao anterior do .r (ultimo backup). Retorna codigo de saida."""
+    rec = last_restorable(cfg, r_name)
+    if not rec:
+        console.print(
+            "[yellow]Nada para reverter:[/] nenhum backup disponivel para "
+            f"{cfg.project}/{cfg.name}."
+        )
+        return 1
+    console.print(
+        Panel.fit(
+            f"Reverter [bold]{rec.r_name}[/] em "
+            f"[magenta]{rec.project}[/]/[cyan]{rec.env}[/]\n"
+            f"deploy de {rec.timestamp}\n"
+            f"restaurando: {rec.backup}\n"
+            f"para: {rec.remote_path}",
+            title="Rollback",
+            border_style="yellow",
+        )
+    )
+    try:
+        restore_file(cfg, Path(rec.backup), rec.remote_path)
+    except DeployError as exc:
+        console.print(f"[red]X Falha no rollback:[/] {exc}")
+        return 1
+    console.print("[green]OK[/] versao anterior restaurada.")
+    return 0

@@ -73,6 +73,9 @@ class EnvConfig:
     # { local_dir = "web", remote_dir = "/u/app/dev/web", include = ["*.html","*.js"] }
     frontend: dict | None = None
 
+    # --- Backup do .r antes de sobrescrever no servidor ---
+    backup: bool = True
+
     def require_deploy(self) -> None:
         """Valida campos obrigatórios para o passo de deploy."""
         missing = [k for k in ("host", "username") if not getattr(self, k)]

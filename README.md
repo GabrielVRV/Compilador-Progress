@@ -70,10 +70,37 @@ mantendo a conexão SFTP aberta. `Ctrl+C` para parar.
 | `abl-deploy deploy escq9986rp.p -e prod` | compila e envia um fonte ABL |
 | `abl-deploy frontend -e dev` | envia o frontend uma vez |
 | `abl-deploy watch -e dev` | observa o frontend e auto-envia ao salvar |
+| `abl-deploy rollback -e prod` | desfaz o último deploy (restaura o `.r` anterior) |
 | `abl-deploy projects` / `envs` | lista projetos / ambientes |
 
 Opções comuns: `--env/-e` (ambiente), `--project/-p` (projeto), e no `deploy`
 ainda `--compile-only` e `--skip-compile`.
+
+## Segurança: backup e rollback
+
+Todo deploy de `.r` faz **backup automático** da versão que estava no servidor
+(baixada para `build/.abl-backups/<projeto>/<ambiente>/` com timestamp) antes de
+sobrescrever, e registra o envio em `build/.abl-history.json`. Se algo der errado:
+
+```bash
+abl-deploy rollback -e prod
+```
+
+Ele restaura a versão anterior do último `.r` enviado. Pelo menu: "Desfazer
+último deploy (rollback)". Para desligar o backup, use `backup = false` no
+ambiente.
+
+## Frontend incremental
+
+O envio do frontend manda **apenas os arquivos que mudaram** desde a última vez
+(comparando hash, guardado num manifest em `build/`). Isso vale tanto para o
+envio manual quanto para a sincronização inicial do watch — então mesmo com
+muitas pastas, nada é reenviado à toa. Para forçar o envio completo:
+`abl-deploy frontend -e dev --all`.
+
+A varredura é **recursiva** (todas as subpastas, estrutura preservada no
+servidor). O filtro `include` decide os tipos enviados; deixe `include = []`
+(vazio) para enviar **tudo**, qualquer extensão.
 
 ## Configuração
 
@@ -130,7 +157,8 @@ pytest
 - [x] Vários projetos / ambientes
 - [x] Roteamento do `.r` por nome do arquivo
 - [x] Envio de frontend + modo watch (auto-envio ao salvar)
-- [ ] Envio só de arquivos alterados (hash/manifest)
+- [x] Envio só de arquivos alterados (hash/manifest)
+- [x] Backup automático + rollback do `.r`
 - [ ] Deploy de múltiplos fontes ABL de uma vez
 - [ ] `--dry-run`
 

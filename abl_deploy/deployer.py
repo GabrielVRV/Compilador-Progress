@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import posixpath
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ class DeployResult:
     local: Path
     remote: str
     size: int
+    backup: Path | None = None
 
 
 def _connect_kwargs(cfg: EnvConfig) -> dict:
@@ -89,31 +91,80 @@ def ensure_remote_dir(
         _cache.add(remote_dir)
 
 
+def _remote_exists(sftp: paramiko.SFTPClient, remote_path: str) -> bool:
+    try:
+        sftp.stat(remote_path)
+        return True
+    except IOError:
+        return False
+
+
 def deploy_file(
     cfg: EnvConfig,
     local_file: Path,
     *,
+    remote_dir: str | None = None,
     progress: Callable[[int, int], None] | None = None,
+    backup_dir: Path | None = None,
 ) -> DeployResult:
-    """Envia um unico arquivo para o remote_dir do ambiente."""
+    """Envia um unico arquivo para o servidor.
+
+    Se ``backup_dir`` for informado e ja existir um arquivo de mesmo nome no
+    destino, baixa a versao atual para ``backup_dir`` (com timestamp) antes de
+    sobrescrever, permitindo rollback depois.
+    """
     cfg.require_deploy()
     local_file = Path(local_file).resolve()
     if not local_file.is_file():
         raise DeployError(f"Arquivo local nao encontrado: {local_file}")
-    assert cfg.remote_dir
+    target_dir = remote_dir or cfg.remote_dir
+    if not target_dir:
+        raise DeployError("remote_dir nao definido para o envio.")
 
+    backup_path: Path | None = None
     with sftp_session(cfg) as sftp:
-        ensure_remote_dir(sftp, cfg.remote_dir)
-        remote_path = posixpath.join(cfg.remote_dir, local_file.name)
+        ensure_remote_dir(sftp, target_dir)
+        remote_path = posixpath.join(target_dir, local_file.name)
+
+        if backup_dir is not None and _remote_exists(sftp, remote_path):
+            backup_dir = Path(backup_dir)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            backup_path = backup_dir / f"{local_file.stem}.{ts}{local_file.suffix}"
+            try:
+                sftp.get(remote_path, str(backup_path))
+            except Exception as exc:  # noqa: BLE001
+                raise DeployError(
+                    f"Falha ao fazer backup de {remote_path}: {exc}"
+                ) from exc
+
         try:
             sftp.put(str(local_file), remote_path, callback=progress)
-            size = sftp.stat(remote_path).st_size or local_file.stat().st_size
         except DeployError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise DeployError(f"Falha no envio SFTP: {exc}") from exc
 
-    return DeployResult(local=local_file, remote=remote_path, size=int(size))
+    return DeployResult(
+        local=local_file, remote=remote_path,
+        size=local_file.stat().st_size, backup=backup_path,
+    )
+
+
+def restore_file(cfg: EnvConfig, local_file: Path, remote_path: str) -> DeployResult:
+    """Reenvia um arquivo (de backup) para um caminho remoto exato (rollback)."""
+    local_file = Path(local_file)
+    if not local_file.is_file():
+        raise DeployError(f"Backup nao encontrado: {local_file}")
+    with sftp_session(cfg) as sftp:
+        ensure_remote_dir(sftp, posixpath.dirname(remote_path))
+        try:
+            sftp.put(str(local_file), remote_path)
+        except Exception as exc:  # noqa: BLE001
+            raise DeployError(f"Falha ao restaurar {remote_path}: {exc}") from exc
+    return DeployResult(
+        local=local_file, remote=remote_path, size=local_file.stat().st_size
+    )
 
 
 def deploy_many(

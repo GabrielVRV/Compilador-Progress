@@ -35,3 +35,8 @@ id_rsa.*
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Backups / histórico / manifest de deploy (ficam em build_dir)
+.abl-backups/
+.abl-history.json
+.frontend-manifest-*.json

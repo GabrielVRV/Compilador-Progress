@@ -29,7 +29,7 @@ from .config import (
 )
 from .frontend import FrontendError, send_frontend, watch_frontend
 from .menu import run_menu
-from .pipeline import PipelineError, run_pipeline
+from .pipeline import PipelineError, run_pipeline, run_rollback
 from .wizard import run_wizard
 
 app = typer.Typer(
@@ -239,18 +239,38 @@ def config() -> None:
 def frontend(
     env: str = typer.Option(..., "--env", "-e", help="Ambiente (dev/staging/prod)."),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Projeto."),
+    all_: bool = typer.Option(
+        False, "--all", help="Reenvia tudo, ignorando o manifest (forca full)."
+    ),
 ) -> None:
-    """Envia todos os arquivos de frontend (sem compilar)."""
+    """Envia os arquivos de frontend alterados (ou tudo com --all)."""
     try:
         cfg = load_config(env, project)
     except ConfigError as exc:
         console.print(f"[red]Erro de config:[/] {exc}")
         raise typer.Exit(code=1)
     try:
-        send_frontend(cfg, console=console)
+        send_frontend(cfg, console=console, only_changed=not all_)
     except FrontendError as exc:
         console.print(f"[red]X {exc}[/]")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def rollback(
+    env: str = typer.Option(..., "--env", "-e", help="Ambiente (dev/staging/prod)."),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Projeto."),
+    source: Optional[str] = typer.Option(
+        None, "--source", "-s", help="Reverter um .r/fonte especifico (ex.: escq9986rp.r)."
+    ),
+) -> None:
+    """Restaura a versao anterior do .r (ultimo deploy com backup)."""
+    try:
+        cfg = load_config(env, project)
+    except ConfigError as exc:
+        console.print(f"[red]Erro de config:[/] {exc}")
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=run_rollback(cfg, console=console, r_name=source))
 
 
 @app.command()

@@ -13,7 +13,7 @@ from rich.console import Console
 
 from .config import ConfigError, ProjectConfig, load_projects
 from .frontend import FrontendError, send_frontend, watch_frontend
-from .pipeline import PipelineError, run_pipeline
+from .pipeline import PipelineError, run_pipeline, run_rollback
 from .wizard import run_wizard
 
 console = Console()
@@ -101,6 +101,20 @@ def _action_frontend(projects: dict[str, ProjectConfig], watch: bool) -> None:
         console.print(f"[red]X {exc}[/]")
 
 
+def _action_rollback(projects: dict[str, ProjectConfig]) -> None:
+    picked = _pick_project_env(projects)
+    if not picked:
+        return
+    project, env_name = picked
+    cfg = project.env(env_name)
+    if not questionary.confirm(
+        f"Reverter o ultimo deploy de {project.name}/{env_name}?", default=False
+    ).ask():
+        console.print("[dim]Cancelado.[/]")
+        return
+    run_rollback(cfg, console=console)
+
+
 def run_menu() -> int:
     """Loop do menu. Retorna o codigo de saida."""
     console.print("[bold cyan]ABL Deploy[/]\n")
@@ -124,7 +138,8 @@ def run_menu() -> int:
             "O que voce quer fazer?",
             [
                 "Compilar e enviar ABL",
-                "Enviar frontend (uma vez)",
+                "Desfazer ultimo deploy (rollback)",
+                "Enviar frontend (so o que mudou)",
                 "Observar frontend (watch, auto-envio)",
                 "Configurar (assistente)",
                 "Sair",
@@ -141,6 +156,8 @@ def run_menu() -> int:
             continue
         if action == "Compilar e enviar ABL":
             _action_deploy_abl(projects)
+        elif action.startswith("Desfazer"):
+            _action_rollback(projects)
         elif action.startswith("Enviar frontend"):
             _action_frontend(projects, watch=False)
         elif action.startswith("Observar frontend"):
